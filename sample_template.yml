@@ -1,0 +1,292 @@
+# this file can be processed by running something like: 
+# oc process -f openshift/container-gateway.yml --param-file=openshift/container-gateway.env | oc create -f -
+
+apiVersion: v1
+kind: Template
+metadata:
+  name: container-gateway-template
+  labels:
+    name: containergateway
+  annotations:
+    description: Template for the Container Gateway
+objects:
+  - apiVersion: v1
+    kind: ImageStream
+    metadata:
+      annotations:
+        description: Container Gateway image stream
+        openshift.io/image.insecureRepository: "${DOCKER_REGISTRY_INSECURE}"
+      labels:
+        name: containergateway
+      name: container-gateway-is
+    spec:
+      tags:
+      - annotations:
+        from:
+          kind: DockerImage
+          name: "${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}"
+        name: "${DOCKER_IMAGE_TAG}"
+        importPolicy:
+          scheduled: true
+          insecure: ${{DOCKER_REGISTRY_INSECURE}}
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        name: containergateway
+        service: container-gateway-svc
+      name: container-gateway-svc
+      annotations:
+        description: "The Container Gateway service"
+    spec:
+      ports:
+        - port: 8080
+          targetPort: 8080
+          protocol: TCP
+          name: container-gateway-http-port
+        - port: 8443
+          targetPort: 8443
+          protocol: TCP
+          name: container-gateway-https-port
+        - port: 9443
+          targetPort: 9443
+          protocol: TCP
+          name: container-gateway-pm-port
+      selector:
+        name: containergateway
+      type: ClusterIP
+  - apiVersion: v1
+    kind: Route
+    metadata:
+      labels:
+        name: containergateway
+        router: default
+      name: container-gateway-pm-route
+      annotations:
+        description: "The route to expose the Container Gateway's Policy Manager port"
+    spec:
+      host: pm.${CONTAINER_GATEWAY_PUBLIC_HOST}
+      to:
+        kind: Service
+        name: container-gateway-svc
+      port:
+        targetPort: container-gateway-pm-port
+      tls:
+        termination: passthrough
+  - apiVersion: v1
+    kind: Route
+    metadata:
+      labels:
+        name: containergateway
+        router: default
+      name: container-gateway-http-route
+      annotations:
+        description: "The route to expose the Container Gateway's HTTP port"
+    spec:
+      host: http.${CONTAINER_GATEWAY_PUBLIC_HOST}
+      to:
+        kind: Service
+        name: container-gateway-svc
+      port:
+        targetPort: container-gateway-http-port
+  - apiVersion: v1
+    kind: Route
+    metadata:
+      labels:
+        name: containergateway
+        router: default
+      name: container-gateway-https-route
+      annotations:
+        description: "The route to expose the Container Gateway's HTTPS port"
+    spec:
+      host: https.${CONTAINER_GATEWAY_PUBLIC_HOST}
+      to:
+        kind: Service
+        name: container-gateway-svc
+      port:
+        targetPort: container-gateway-https-port
+      tls:
+        termination: passthrough
+  - apiVersion: autoscaling/v1
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: container-gateway-hpa
+      labels:
+        name: containergateway
+    spec:
+      scaleTargetRef:
+        kind: DeploymentConfig
+        name: container-gateway-dc
+        apiVersion: extensions/v1beta1
+      minReplicas: 1
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 75
+  - apiVersion: v1
+    kind: DeploymentConfig
+    metadata:
+      name: container-gateway-dc
+      labels:
+        name: containergateway
+      annotations:
+        description: "The Container Gateway deployment configuration"
+    spec:
+      strategy:
+        type: Rolling
+        rollingParams:
+          timeoutSeconds: 1200
+      triggers:
+        - type: ConfigChange
+        - type: ImageChange
+          imageChangeParams:
+            automatic: true
+            containerNames:
+              - gateway-container
+            from:
+              kind: ImageStreamTag
+              name: "container-gateway-is:${DOCKER_IMAGE_TAG}"
+      replicas: 1
+      selector:
+        name: containergateway
+        deploymentconfig: container-gateway-dc
+      template:
+        metadata:
+          labels:
+            name: containergateway
+            deploymentconfig: container-gateway-dc
+        spec:
+          containers:
+            - name: gateway-container
+              image: "${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}"
+              imagePullPolicy: Always
+              resources:
+                requests:
+                  cpu: 4000m
+                  memory: 6Gi
+                limits:
+                  cpu: 4000m
+                  memory: 6Gi
+              terminationMessagePath: /dev/termination-log
+              ports:
+                - containerPort: 8080
+                - containerPort: 8443
+                - containerPort: 9443
+              env:
+                - name: ACCEPT_LICENSE
+                  value: ${ACCEPT_LICENSE}
+                - name: SSG_JVM_HEAP
+                  value: ${SSG_JVM_HEAP}
+                - name: SSG_ADMIN_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: containergateway
+                      key: ssg.adminusername
+                - name: SSG_ADMIN_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: containergateway
+                      key: ssg.adminpassword
+                - name: SSG_LICENSE
+                  valueFrom:
+                    secretKeyRef:
+                      name: containergateway
+                      key: ssg.license
+                - name: SSG_SSL_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: containergateway
+                      key: ssg.sslkey
+                - name: SSG_SSL_KEY_PASS
+                  valueFrom:
+                    secretKeyRef:
+                      name: containergateway
+                      key: ssg.sslkeypass
+                - name: SSG_DATABASE_JDBC_URL
+                  value: ${SSG_DATABASE_JDBC_URL}
+                - name: SSG_DATABASE_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: containergateway
+                      key: ssg.dbuser
+                - name: SSG_DATABASE_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: containergateway
+                      key: ssg.dbpass
+                - name: SSG_CLUSTER_HOST
+                  value: ${SSG_CLUSTER_HOST}
+                - name: SSG_CLUSTER_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: containergateway
+                      key: ssg.clusterhostpass
+                - name: EXTRA_JAVA_ARGS
+                  value: ${EXTRA_JAVA_ARGS}
+              readinessProbe:
+                 exec:
+                   command: [sh, /opt/docker/rc.d/diagnostic/health_check.sh]
+                 initialDelaySeconds: 120
+                 timeoutSeconds: 5
+                 periodSeconds: 5
+                 successThreshold: 1
+              livenessProbe:
+                 exec:
+                   command: [sh, /opt/docker/rc.d/diagnostic/health_check.sh]
+                 initialDelaySeconds: 120
+                 timeoutSeconds: 5
+                 periodSeconds: 5
+                 successThreshold: 1
+          dnsPolicy: ClusterFirst
+          restartPolicy: Always
+          securityContext: {}
+          terminationGracePeriodSeconds: 60
+        test: false
+      status: {}
+parameters:
+  - name: CONTAINER_GATEWAY_PUBLIC_HOST
+    description: Openshift public hostname
+    required: true
+  - name: DOCKER_REGISTRY
+    description: The FQDN of the Docker registry to pull the Docker image from
+    required: true
+  - name: DOCKER_REGISTRY_INSECURE
+    description: Whether the Docker Registry we're pulling from uses self signed certs
+    required: true
+  - name: DOCKER_IMAGE_NAME
+    description: The name of the Docker image to pull (i.e. the part between the registry and the tag when running docker pull)
+    required: true
+  - name: DOCKER_IMAGE_TAG
+    description: The tag of the Docker image to deploy
+    required: true
+  - name: ACCEPT_LICENSE
+    description: Accept License
+    required: true
+  - name: SSG_LICENSE
+    description: Gateway license ( cat license.xml | gzip | base64 )
+    required: false
+  - name: SSG_JVM_HEAP
+    description: The argument to use for the -Xms and -Xmx JVM heap size options
+    required: false
+  - name: SSG_ADMIN_USERNAME
+    description: The admin username
+    required: false
+  - name: SSG_ADMIN_PASSWORD
+    description: The admin password
+    required: false
+  - name: SSG_DATABASE_JDBC_URL
+    description: The external database JDBC url
+    required: false
+  - name: SSG_DATABASE_USER
+    description: User to connect to the external db.
+    required: false
+  - name: SSG_DATABASE_PASSWORD
+    description: Password to connect to the external db
+    required: false
+  - name: SSG_CLUSTER_HOST
+    description: The cluster hostname
+    required: false
+  - name: SSG_CLUSTER_PASSWORD
+    description: The cluster password
+    required: false
+  - name: EXTRA_JAVA_ARGS
+    description: Extra system properties or other arguments to add to the JVM command line
+    required: false
