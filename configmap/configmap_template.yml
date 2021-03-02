@@ -41,7 +41,7 @@ objects:
     spec:
       ports:
         - port: 8080
-          targetPort: 9000
+          targetPort: 123000
           protocol: TCP
           name: container-gateway-http-port
         - port: 8443
