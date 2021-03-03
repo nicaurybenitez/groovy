@@ -1,0 +1,4 @@
+R099	configmap/configmap_template_git.yml	configmap/configmap_template.yml
+M	watcher.sh
+R099	configmap/configmap_template_git.yml	configmap/configmap_template.yml
+R099	configmap/configmap_template_git.yml	configmap/configmap_template.yml
